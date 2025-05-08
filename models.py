@@ -1,89 +1,99 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Table, Numeric
+import datetime
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Numeric
 from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.ext.declarative import declarative_base, declared_attr
+from sqlalchemy.dialects.postgresql import ARRAY
 from config import Config
+from enum import Enum
 
 Model = declarative_base()
 Model.metadata.schema = Config.DB_SCHEMA
 
-# Many-to-Many relationship between InformationBlock and Topic and Client and Topic
-information_block_topic = Table(
-    'information_block_topic', Model.metadata,
-    Column('information_block_id', Integer, ForeignKey('information_block.id'), primary_key=True),
-    Column('topic_id', Integer, ForeignKey('topic.id'), primary_key=True)
-)
 
-client_topic = Table(
-    'client_topic', Model.metadata,
-    Column('client_id', Integer, ForeignKey('client.id'), primary_key=True),
-    Column('topic_id', Integer, ForeignKey('topic.id'), primary_key=True)
-)
+def now():
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
-class Client(Model):
-    __tablename__ = 'client'
-
+class ModelMixin:
     id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, default=now, nullable=False)
+
+    @declared_attr
+    def __tablename__(self):
+        # Auto-generate table name from class name (lowercase)
+        return self.__name__.lower()
+
+
+class Client(ModelMixin, Model):
     name = Column(String)
-
-    topics = relationship('Topic', secondary=client_topic, back_populates='clients')
-
-
-class Schedule(Model):
-    __tablename__ = 'schedule'
-
-    id = Column(Integer, primary_key=True)
-    frequency = Column(String)
-
-    sources = relationship('Source', back_populates='schedule')
-    topics = relationship('Topic', back_populates='schedule')
+    subscriptions = relationship("Subscription", back_populates="client")
 
 
-class Source(Model):
-    __tablename__ = 'source'
+class Subscription(ModelMixin, Model):
+    topic_id = Column(Integer, ForeignKey('topic.id'))
+    topic = relationship('Topic', back_populates='subscriptions')
 
-    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey('client.id'))
+    client = relationship('Client', back_populates='subscriptions')
+
+    # Total amount spent
+    total_amount = Column(Numeric(precision=10, scale=4), nullable=False, default=0.0)
+    single_metric_pricing = Column(Numeric(precision=10, scale=4), nullable=False, default=1.0)
+    transactions = relationship("Transaction", back_populates="subscription")
+
+
+class Transaction(ModelMixin, Model):
+    subscription_id = Column(Integer, ForeignKey('subscription.id'))
+    subscription = relationship('Subscription', back_populates='transactions')
+
+    metric_id = Column(Integer, ForeignKey('metric.id'))
+    metric = relationship('Metric', back_populates='transactions')
+
+    # Increase by single_metric_pricing of related subscription
+    amount = Column(Numeric(precision=10, scale=4))
+
+
+class ScheduleFrequency(Enum):
+    HOURLY = 'hourly'
+    DAILY = 'daily'
+    WEEKLY = 'weekly'
+    MONTHLY = 'monthly'
+    QUARTERLY = 'quarterly'
+    YEARLY = 'yearly'
+
+
+class Source(ModelMixin, Model):
     name = Column(String)
-    schedule_id = Column(Integer, ForeignKey('schedule.id'))
-    schedule = relationship('Schedule', back_populates='sources')
+    url = Column(String)
+    schedules = Column(ARRAY(String))
+    contents = relationship("Content", back_populates="source")
 
-    information_blocks = relationship('InformationBlock', back_populates='source')
 
-
-class InformationBlock(Model):
-    __tablename__ = 'information_block'
-
-    id = Column(Integer, primary_key=True)
+class Content(ModelMixin, Model):
     title = Column(String)
+    url = Column(String)
     content = Column(String)
-    happened_on = Column(DateTime)
 
     source_id = Column(Integer, ForeignKey('source.id'))
-    source = relationship('Source', back_populates='information_blocks')
-
-    topics = relationship('Topic', secondary=information_block_topic, back_populates='information_blocks')
+    source = relationship('Source', back_populates='contents')
 
 
-class Topic(Model):
-    __tablename__ = 'topic'
+class Topic(ModelMixin, Model):
+    name = Column(String)
+    subscriptions = relationship("Subscription", back_populates="topic")
 
-    id = Column(Integer, primary_key=True)
+
+class Metric(ModelMixin, Model):
     name = Column(String)
 
-    schedule_id = Column(Integer, ForeignKey('schedule.id'))
-    schedule = relationship('Schedule', back_populates='topics')
-
-    information_blocks = relationship('InformationBlock', secondary=information_block_topic, back_populates='topics')
-    clients = relationship('Client', secondary=client_topic, back_populates='topics')
-    metrics = relationship('Metric', back_populates='topic')
+    topic_ids = Column(ARRAY(Integer))
+    metric_values = relationship("MetricValue", back_populates="metric")
+    transactions = relationship("Transaction", back_populates="metric")
 
 
-class Metric(Model):
-    __tablename__ = 'metric'
-
-    id = Column(Integer, primary_key=True)
+class MetricValue(ModelMixin, Model):
     value = Column(Numeric(precision=10, scale=4))
     calculated_on = Column(DateTime)
 
-    topic_id = Column(Integer, ForeignKey('topic.id'))
-    topic = relationship('Topic', back_populates='metrics')
+    metric_id = Column(Integer, ForeignKey('metric.id'))
+    metric = relationship('Metric', back_populates='metric_values')

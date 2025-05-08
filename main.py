@@ -1,107 +1,275 @@
 import random
+import datetime
+import threading
+import time
+from decimal import Decimal
+
 from faker import Faker
 from database import with_database
-from models import InformationBlock, Schedule, Topic, Client, Source, Metric
+import models
 
+SEED = 42
 source_names = ['Reuters', 'AP', 'Bloomberg', 'CNN', 'BBC', 'New York Times', 'Washington Post', 'The Guardian']
-schedule_frequencies = ['daily', 'weekly', 'monthly', 'hourly', 'quarterly']
+
 topic_names = [
-    'Technology', 'Finance', 'Health', 'Politics', 'Entertainment',
-    'Sports', 'Science', 'Business', 'Education', 'Environment'
+    'Technology',
+    'Finance',
+    'Health',
+    'Politics',
+    'Entertainment',
+    'Sports',
+    'Science',
+    'Business',
+    'Education',
+    'Environment',
 ]
 
-def populate(db, amount = 100):
+metric_names = [
+    'Page Views', 'Engagement Score', 'Subscription Rate', 'Bounce Rate', 'Social Shares', 'Reading Time'
+]
+
+
+def _populate(db):
     fake = Faker()
-
-    schedules = []
-    for _ in range(5):
-        schedule = Schedule(
-            frequency=random.choice(schedule_frequencies)
-        )
-        schedules.append(schedule)
-    db.add_all(schedules)
-    db.commit()
-
-    topics = []
-
-    for i, name in enumerate(topic_names):
-        topic = Topic(
-            name=name,
-            schedule_id=random.choice([s.id for s in schedules])
-        )
-        topics.append(topic)
-    db.add_all(topics)
-    db.commit()
-
-    clients = []
-    for _ in range(amount):
-        client = Client(
-            name=fake.company()
-        )
-
-        client.topics = random.sample(topics, random.randint(1, 3))
-        clients.append(client)
-    db.add_all(clients)
-    db.commit()
+    Faker.seed(SEED)
+    random.seed(SEED)
 
     sources = []
     for name in source_names:
-        source = Source(
+        source = models.Source(
             name=name,
-            schedule_id=random.choice([s.id for s in schedules])
+            url=fake.url(),
+            schedules=[random.choice(list(models.ScheduleFrequency)).value for _ in range(2)]
         )
+        db.add(source)
         sources.append(source)
-
-    db.add_all(sources)
     db.commit()
 
-    information_blocks = []
-    for _ in range(amount * 3):
-        info_block = InformationBlock(
-            title=fake.sentence(),
-            content=fake.text(max_nb_chars=500),
-            happened_on=fake.date_time_between(start_date='-1y', end_date='now'),
-            source_id=random.choice([s.id for s in sources])
-        )
-
-        info_block.topics = random.sample(topics, random.randint(1, 2))
-        information_blocks.append(info_block)
-
-    db.add_all(information_blocks)
+    topics = []
+    for name in topic_names:
+        topic = models.Topic(name=name)
+        db.add(topic)
+        topics.append(topic)
     db.commit()
 
-    # Create metrics
     metrics = []
-    for topic in topics:
-        for _ in range(random.randint(1, 3)):
-            metric = Metric(
-                value=round(random.uniform(0.0, 100.0), 2),
-                calculated_on=fake.date_time_between(start_date='-1y', end_date='now'),
-                topic_id=topic.id
-            )
-            metrics.append(metric)
-
-    db.add_all(metrics)
+    for name in metric_names:
+        metric = models.Metric(
+            name=name,
+            topic_ids=[random.choice([t.id for t in topics]) for _ in range(random.randint(1, 3))]
+        )
+        db.add(metric)
+        metrics.append(metric)
     db.commit()
 
-    print(f"Successfully created dummy data:")
-    print(f"- {len(clients)} clients")
-    print(f"- {len(schedules)} schedules")
+    contents = []
+    for _ in range(random.randint(200, 300)):
+        content = models.Content(
+            title=fake.sentence(),
+            url=fake.url(),
+            content=fake.text(max_nb_chars=2000),
+            source_id=random.choice(sources).id,
+            created_at=fake.date_time_between(start_date='-1y', tzinfo=datetime.timezone.utc)
+        )
+        db.add(content)
+        contents.append(content)
+    db.commit()
+
+    # Create clients (10-20)
+    clients = []
+    for _ in range(random.randint(10, 20)):
+        client = models.Client(
+            name=fake.company(),
+            created_at=fake.date_time_between(start_date='-2y', tzinfo=datetime.timezone.utc)
+        )
+        db.add(client)
+        clients.append(client)
+    db.commit()
+
+    # Create subscriptions (3-5 per client)
+    subscriptions = []
+    for client in clients:
+        for _ in range(random.randint(3, 5)):
+            topic = random.choice(topics)
+            total_amount = Decimal(random.randint(100, 10000) / 100)
+            single_metric_pricing = total_amount / random.randint(5, 25)
+
+            subscription = models.Subscription(
+                topic_id=topic.id,
+                client_id=client.id,
+                total_amount=total_amount,
+                single_metric_pricing=single_metric_pricing,
+                created_at=fake.date_time_between(
+                    start_date=client.created_at,
+                    end_date='now',
+                    tzinfo=datetime.timezone.utc
+                )
+            )
+            db.add(subscription)
+            subscriptions.append(subscription)
+    db.commit()
+
+    # Create transactions (5-20 per subscription)
+    transactions = []
+    for subscription in subscriptions:
+        remaining_amount = subscription.total_amount
+
+        while remaining_amount > 0:
+            # Random amount but leave enough for remaining transactions
+            amount = subscription.single_metric_pricing
+
+            remaining_amount -= amount
+
+            transaction = models.Transaction(
+                subscription_id=subscription.id,
+                metric_id=random.choice(metrics).id,
+                amount=amount,
+                created_at=fake.date_time_between(
+                    start_date=subscription.created_at,
+                    end_date='now',
+                    tzinfo=datetime.timezone.utc
+                )
+            )
+            db.add(transaction)
+            transactions.append(transaction)
+            db.commit()
+
+            # Create metric values (daily for last year for each metric)
+            metric_values = []
+            for metric in metrics:
+                current_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=365)
+            end_date = datetime.datetime.now(datetime.timezone.utc)
+
+        if current_date and end_date:
+            while current_date <= end_date:
+                # Skip some days randomly to make it more realistic
+                if random.random() > 0.2:  # 80% chance to create a value for this day
+                    value = Decimal(random.randint(1, 10000) / 100)
+
+                    metric_value = models.MetricValue(
+                        metric_id=metric.id,
+                        value=value,
+                        calculated_on=current_date
+                    )
+                    db.add(metric_value)
+                    metric_values.append(metric_value)
+
+                current_date += datetime.timedelta(days=1)
+    db.commit()
+
+    print(f"Database populated with:")
     print(f"- {len(sources)} sources")
     print(f"- {len(topics)} topics")
-    print(f"- {len(information_blocks)} information blocks")
     print(f"- {len(metrics)} metrics")
+    print(f"- {len(contents)} content items")
+    print(f"- {len(clients)} clients")
+    print(f"- {len(subscriptions)} subscriptions")
+    print(f"- {len(transactions)} transactions")
+    print(f"- {len(metric_values)} metric values")
 
 
-def print_all(db):
-    information_blocks = db.query(InformationBlock).all()
-    print('Information Blocks', len(information_blocks))
+def populate():
+    with with_database() as _db:
+        _populate(_db)
 
-    for information_block in information_blocks:
-        print(information_block.id, information_block.title)
+
+def test_performance(count: int):
+    random.seed(SEED)
+
+    from business import process_metric_value
+
+    with with_database() as db:
+        metric_ids = [
+            m.id for m in db.query(models.Metric).all()
+        ]
+
+    print(f"Starting performance test for metrics: {metric_ids}...")
+
+    start_time = time.perf_counter()
+
+    progress_step = count // 20  # 5% steps
+
+    for i in range(count):
+        if i == 0:
+            continue
+
+        metric_id = random.choice(metric_ids)
+        value = Decimal(random.randint(1, 10000) / 100)
+        with with_database() as db:
+
+            process_metric_value(db, metric_id=metric_id, value=value)
+            if i % progress_step == 0 or i == count and count > 0 :
+                elapsed_now = time.perf_counter() - start_time
+                print(f'Progress: {int((i / count) * 100)}% ({i}/{count}) in {elapsed_now:.4f} seconds')
+
+    end_time = time.perf_counter()
+
+    elapsed = end_time - start_time
+    print(f"process_metric_value(count={count}) completed in {elapsed:.4f} seconds")
+    print(f'with ({(count / elapsed):.4f}) per seconds')
+
+
+def test_concurrent_subscription_updates():
+    random.seed(SEED)
+
+    from business import process_metric_value
+    with with_database() as db:
+        subscription = db.query(models.Subscription).first()
+        metric = db.query(models.Metric).first()
+
+    start_barrier = threading.Barrier(2)
+    errors = []
+
+    def process_metric_thread(_metric_id, _value):
+        try:
+            with with_database() as db:
+                start_barrier.wait()
+                process_metric_value(
+                    db=db,
+                    metric_id=_metric_id,
+                    value=_value,
+                    calculated_on=datetime.datetime.now()
+                )
+
+        except Exception as e:
+            errors.append(e)
+
+    threads = [
+        threading.Thread(target=process_metric_thread, args=(metric.id, Decimal("10.0"))),
+        threading.Thread(target=process_metric_thread, args=(metric.id, Decimal("20.0")))
+    ]
+
+    for t in threads:
+        t.start()
+
+    # Wait for threads to complete
+    for t in threads:
+        t.join()
+
+    assert not errors, f"Threads raised exceptions: {errors}"
+    with with_database() as db:
+        db.refresh(subscription)
+
+        # Should be exactly 2.00 (1.00 from each transaction)
+        assert subscription.total_amount == Decimal("2.00"), "Subscription total_amount should reflect both transactions"
+
+        # Verify two transactions were created
+        transaction_count = db.query(models.Transaction).filter_by(
+            subscription_id=subscription.id
+        ).count()
+        assert transaction_count == 2, "Should have two transactions recorded"
+
+        # Verify both metric values were recorded
+        metric_values = db.query(models.MetricValue).filter_by(
+            metric_id=metric.id
+        ).all()
+        assert len(metric_values) == 2, "Should have two metric values recorded"
+        print('Isolation test passed')
 
 
 if __name__ == '__main__':
-    with with_database() as _db:
-        # populate(_db)
-        print_all(_db)
+    pass
+
+    # populate()
+    # test_performance(1000)
+    # test_concurrent_subscription_updates()

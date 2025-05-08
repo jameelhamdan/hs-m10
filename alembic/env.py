@@ -25,7 +25,9 @@ def run_migrations() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            version_table_schema=EnvironmentConfig.DB_SCHEMA,
         )
 
         with context.begin_transaction():
