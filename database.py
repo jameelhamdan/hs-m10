@@ -4,13 +4,20 @@ from contextlib import contextmanager
 from config import Config
 
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=create_engine(
-    Config.SQLALCHEMY_DATABASE_URI,
-    **Config.SQLALCHEMY_ENGINE_OPTIONS
-))
+
 
 @contextmanager
-def with_database():
+def with_database(**kwargs):
+    config_kwargs = {
+        **Config.SQLALCHEMY_ENGINE_OPTIONS
+    }
+    config_kwargs.update(kwargs)
+
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=create_engine(
+        Config.SQLALCHEMY_DATABASE_URI,
+        **config_kwargs,
+    ))
+
     db = SessionLocal()
 
     try:

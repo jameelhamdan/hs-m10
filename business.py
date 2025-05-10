@@ -1,4 +1,5 @@
 import decimal
+import time
 from decimal import Decimal
 from typing import List
 import datetime
@@ -58,7 +59,7 @@ def add_content_with_metric_values(
     return content
 
 
-def process_metric_value(db: Session, metric_id: int, value: Decimal, calculated_on: datetime.datetime = None):
+def process_metric_value(db: Session, metric_id: int, value: Decimal, calculated_on: datetime.datetime = None, _artificial_delay: float = 0):
     if calculated_on is None:
         calculated_on = models.now()
 
@@ -100,5 +101,6 @@ def process_metric_value(db: Session, metric_id: int, value: Decimal, calculated
             .where(models.Subscription.id == subscription.id)
             .values(total_amount=models.Subscription.total_amount + subscription.single_metric_pricing)
         )
-
+        if _artificial_delay:
+            time.sleep(_artificial_delay)
     db.commit()

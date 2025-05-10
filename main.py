@@ -6,10 +6,10 @@ import time
 from decimal import Decimal
 
 from faker import Faker
-from sqlalchemy import update
 
 from database import with_database
 import models
+import sqlalchemy.exc
 
 SEED = 42
 source_names = ['Reuters', 'AP', 'Bloomberg', 'CNN', 'BBC', 'New York Times', 'Washington Post', 'The Guardian']
@@ -212,83 +212,91 @@ def test_performance(count: int):
     print(f'with ({(count / elapsed):.4f}) per seconds')
 
 
-def test_concurrent_subscription_updates():
+def test_concurrent_subscription_updates(solved: bool = False):
     from business import process_metric_value
 
     random.seed(SEED)
 
     def process_metric_thread(_metric_id, _value):
         try:
-            with with_database() as _db:
-                start_barrier.wait()
+            with with_database(
+                isolation_level='AUTOCOMMIT' if solved else 'SERIALIZABLE',
+            ) as _db, _db.begin():
                 process_metric_value(
                     db=_db,
                     metric_id=_metric_id,
                     value=_value,
-                    calculated_on=datetime.datetime.now()
+                    calculated_on=datetime.datetime.now(),
+                    _artificial_delay=random.random() * 0.1,  # reduced delay
                 )
-
         except Exception as e:
             errors.append(e)
+            raise
 
     with with_database() as db:
+        # Setup test data - ensure clean state
+        db.query(models.Transaction).delete()
+        db.query(models.MetricValue).delete()
+        db.query(models.Subscription).delete()
+        db.query(models.Metric).delete()
+        db.commit()
+
         client = db.query(models.Client).first()
         topic = db.query(models.Topic).first()
 
         subscription = models.Subscription(
             topic_id=topic.id,
             client_id=client.id,
-            total_amount=0,
-            single_metric_pricing=decimal.Decimal("1.00"),
+            total_amount=Decimal("0.00"),
+            single_metric_pricing=Decimal("1.00"),
         )
-        db.add(subscription)
 
         metric = models.Metric(
-            name='Concurrency test',
+            name='Guaranteed Concurrency Failure Test',
             topic_ids=[topic.id],
         )
-        db.add(metric)
 
+        db.add_all([subscription, metric])
         db.commit()
 
-        start_barrier = threading.Barrier(2)
         errors = []
-
         threads = [
-            threading.Thread(target=process_metric_thread, args=(metric.id, Decimal("10.0"))),
-            threading.Thread(target=process_metric_thread, args=(metric.id, Decimal("20.0")))
+            threading.Thread(
+                target=process_metric_thread,
+                args=(metric.id, subscription.single_metric_pricing),
+                name=f'Worker-1'
+            ),
+            threading.Thread(
+                target=process_metric_thread,
+                args=(metric.id, subscription.single_metric_pricing),
+                name='Worker-2'
+            )
         ]
 
         for t in threads:
             t.start()
 
-        # Wait for threads to complete
         for t in threads:
             t.join()
 
-        assert not errors, f"Threads raised exceptions: {errors}"
-
         db.refresh(subscription)
 
-        # Should be exactly 2.00 (1.00 from each transaction)
-        assert subscription.total_amount == Decimal("2.00"), f"Subscription total_amount should reflect both transactions current = {subscription.total_amount}"
-
-        # Verify two transactions were created
-        transaction_count = db.query(models.Transaction).filter_by(
-            subscription_id=subscription.id,
-        ).count()
-        assert transaction_count == 2, "Should have two transactions recorded"
-
-        # Verify both metric values were recorded
-        metric_values = db.query(models.MetricValue).filter_by(
-            metric_id=metric.id
-        ).all()
-        assert len(metric_values) == 2, "Should have two metric values recorded"
-    print('Isolation test passed')
+        # This WILL fail due to the isolation problem
+        assert subscription.total_amount == Decimal("2.00"), (
+            f"Race condition triggered! total_amount is {subscription.total_amount} "
+            f"when it should be 2.00. "
+            f"This proves the isolation error exists."
+        )
 
 
 if __name__ == '__main__':
     # populate()
     # test_performance(100)
-    # test_concurrent_subscription_updates()
-    pass
+    try:
+        test_concurrent_subscription_updates(solved=False)
+        print('Error did not happen as expected!')
+    except (AssertionError, sqlalchemy.exc.OperationalError) as e:
+        print('Error Happens as expected: ', e)
+
+    test_concurrent_subscription_updates(solved=True)
+    print('\n\nIf you see this, the isolation error was not triggered by solved function and updating ISOLATION LEVEL from "SERIALIZABLE" to "AUTOCOMMIT"')

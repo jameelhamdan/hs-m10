@@ -1,7 +1,4 @@
-### Event Horizon
-
-ERD:
-https://miro.com/app/board/uXjVI7JqHEQ=/?share_link_id=563672718623
+### Event Horizon - Test Schema
 
 ### Initialize database:
 

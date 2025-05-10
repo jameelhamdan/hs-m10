@@ -13,7 +13,6 @@ class Config:
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {
-        'isolation_level': 'AUTOCOMMIT',
         'connect_args': {
             'options': f'-csearch_path={DB_SCHEMA}'
         }
