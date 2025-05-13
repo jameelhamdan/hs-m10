@@ -6,6 +6,7 @@ load_dotenv()
 
 class Config:
     DATABASE_URL = os.getenv('DATABASE_URL')
+    MONGO_URI = os.getenv('MONGO_URI')
     DB_SCHEMA = os.getenv('DB_SCHEMA', 'public')
 
     parsed = urlparse(DATABASE_URL)

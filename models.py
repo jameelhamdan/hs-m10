@@ -1,4 +1,5 @@
 import datetime
+import mongoengine
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Numeric
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base, declared_attr
@@ -66,16 +67,22 @@ class Source(ModelMixin, Model):
     name = Column(String)
     url = Column(String)
     schedules = Column(ARRAY(String))
-    contents = relationship("Content", back_populates="source")
 
 
-class Content(ModelMixin, Model):
-    title = Column(String)
-    url = Column(String)
-    content = Column(String)
+class Content(mongoengine.Document):
+    created_at = mongoengine.fields.DateTimeField(default=now, required=True)
+    updated_at = mongoengine.fields.DateTimeField(default=now, required=True)
 
-    source_id = Column(Integer, ForeignKey('source.id'))
-    source = relationship('Source', back_populates='contents')
+    title = mongoengine.fields.StringField()
+    url = mongoengine.fields.StringField()
+    content = mongoengine.fields.StringField()
+
+    source_id = mongoengine.fields.IntField()
+
+    meta = {
+        'db_alias': 'default',
+        'collection': 'content',
+    }
 
 
 class Topic(ModelMixin, Model):
